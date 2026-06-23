@@ -7,6 +7,7 @@ import * as interact from './commands/interact.js';
 import * as advanced from './commands/advanced.js';
 import * as facebook from './commands/facebook.js';
 import * as dataset from './commands/dataset.js';
+import * as scanmod from './commands/scan.js';
 
 const REGISTRY = {
   'session start': session.start,
@@ -35,6 +36,7 @@ const REGISTRY = {
   'fb harvest': facebook.harvest,
   'row add': dataset.add,
   'row count': dataset.count,
+  'fb scan': scanmod.scan,
 };
 
 const BOOL_FLAGS = new Set(['json', 'full']);

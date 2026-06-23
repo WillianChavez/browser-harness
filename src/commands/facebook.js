@@ -151,7 +151,24 @@ export async function harvest(args, flags) {
   const rounds = Number(flags.rounds || 5);
 
   const { browser } = await connect();
-  const tab = await resolveActivePage(browser, flags);
+  const ctx = browser.contexts()[0] || (await browser.newContext());
+  // pestaña DEDICADA (no secuestra la del usuario); se recrea si se cierra.
+  let page = await ctx.newPage();
+  async function ensurePage() {
+    if (!page || page.isClosed()) page = await ctx.newPage();
+    return page;
+  }
+  async function gotoSafe(url) {
+    await ensurePage();
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    } catch (e) {
+      if (/closed/i.test(e.message)) {
+        page = await ctx.newPage();
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      } else throw e;
+    }
+  }
 
   // dedup global contra lo ya cosechado
   const seen = new Set();
@@ -165,9 +182,9 @@ export async function harvest(args, flags) {
   for (const pageUrl of pages) {
     let postLinks = [];
     try {
-      await tab.page.goto(fbUrl(pageUrl), { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await gotoSafe(fbUrl(pageUrl));
       await sleep(3000);
-      postLinks = await tab.page.evaluate(async (max) => {
+      postLinks = await page.evaluate(async (max) => {
         const found = new Set();
         for (let i = 0; i < 18 && found.size < max; i++) {
           document.querySelectorAll('a[href*="/posts/"], a[href*="/permalink/"], a[href*="story_fbid"]').forEach((a) => {
@@ -195,10 +212,10 @@ export async function harvest(args, flags) {
     let added = 0;
     for (const postUrl of postLinks) {
       try {
-        await tab.page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await gotoSafe(postUrl);
         await sleep(2500);
-        await tab.page.evaluate(pageExpandFn, rounds);
-        const data = await tab.page.evaluate(pageExtractFn);
+        await page.evaluate(pageExpandFn, rounds);
+        const data = await page.evaluate(pageExtractFn);
         for (const it of data.items) {
           const key = (it.author || '') + '|' + (it.text || '').slice(0, 80);
           if (seen.has(key)) continue;
@@ -214,6 +231,7 @@ export async function harvest(args, flags) {
     summary.push({ page: pageUrl, posts: postLinks.length, comments: added });
   }
 
+  await page.close().catch(() => {});
   const totalLines = existsSync(HARVEST) ? readFileSync(HARVEST, 'utf8').split('\n').filter(Boolean).length : 0;
   emit(flags, { summary, harvestTotal: totalLines, file: HARVEST }, (d) =>
     d.summary.map((s) => s.error ? `${s.page}: ERROR ${s.error}` : `${s.page}: ${s.posts} posts, +${s.comments} comentarios`).join('\n') + `\n\nharvest total: ${d.harvestTotal}`

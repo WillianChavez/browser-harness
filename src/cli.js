@@ -30,12 +30,15 @@ const REGISTRY = {
   cookies: advanced.cookies,
   storage: advanced.storage,
   'fb comments': facebook.comments,
+  'fb posts': facebook.posts,
+  'fb expand': facebook.expand,
+  'fb harvest': facebook.harvest,
   'row add': dataset.add,
   'row count': dataset.count,
 };
 
 const BOOL_FLAGS = new Set(['json', 'full']);
-const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data']);
+const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data', 'pages', 'max', 'max-posts', 'rounds']);
 
 function parse(argv) {
   const positional = [];

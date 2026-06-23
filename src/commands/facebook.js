@@ -1,82 +1,221 @@
+import { appendFileSync, readFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { connect, resolveActivePage } from '../session.js';
-import { emit } from '../output.js';
+import { WORKSPACE } from '../config.js';
+import { emit, fail } from '../output.js';
 
-/**
- * Extrae los comentarios/artículos visibles de la pestaña de Facebook activa.
- * Devuelve, por cada bloque: autor (de aria-label), texto y permalink (si lo halla).
- * Pensado para que el agente LEA y EVALÚE cada uno (no es harvesting ciego).
- */
+const HARVEST = resolve(WORKSPACE, 'harvest.jsonl');
+
+// ---- lógica de extracción (se ejecuta dentro de la página) ----
+
+function pageExtractFn() {
+  const NOISE = /^(me gusta|responder|compartir|editado|ver traducci[oó]n|ver original.*|top fan|fan destacado|seguir|más relevantes|más recientes|todos los comentarios|ver más comentarios|ver más respuestas|autor|like|reply|share|edited|view translation|\d+\s*(min|h|d|sem|años?|a)|hace .*|\d+[.,]?\d*\s*(mil|mill)?\.?\s*$|·|seguidores?|\d+ comentarios?|\d+ veces compartido)$/i;
+  function cleanText(raw, author) {
+    const lines = (raw || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const body = [];
+    for (const l of lines) {
+      if (author && (l === author || author.startsWith(l) || l.startsWith(author))) continue;
+      if (NOISE.test(l)) continue;
+      body.push(l);
+    }
+    return body.join('\n').trim();
+  }
+  function cleanLink(href) {
+    try {
+      const u = new URL(href);
+      const cid = u.searchParams.get('comment_id');
+      const rid = u.searchParams.get('reply_comment_id');
+      const qs = [];
+      if (cid) qs.push('comment_id=' + cid);
+      if (rid) qs.push('reply_comment_id=' + rid);
+      return u.origin + u.pathname + (qs.length ? '?' + qs.join('&') : '');
+    } catch {
+      return (href || '').split('&__cft__')[0];
+    }
+  }
+  const arts = [...document.querySelectorAll('div[role="article"]')];
+  const seen = new Set();
+  const out = [];
+  for (const a of arts) {
+    const label = a.getAttribute('aria-label') || '';
+    const author = label
+      .replace(/^Comentario de\s*/i, '').replace(/^Comment by\s*/i, '')
+      .replace(/^Respuesta de\s*/i, '').replace(/^Reply by\s*/i, '')
+      .replace(/\s*al comentario de.*$/i, '').replace(/\s*to .*'s comment.*$/i, '')
+      .replace(/\s*·.*$/, '').replace(/\s+hace\s+.*$/i, '')
+      .replace(/\s+\d+\s*(min|h|d|sem|años?).*$/i, '').trim();
+    let permalink = '';
+    const anchors = [...a.querySelectorAll('a[href]')];
+    const c = anchors.find((x) => /comment_id=|reply_comment_id=/.test(x.href));
+    if (c) permalink = cleanLink(c.href);
+    const text = cleanText(a.innerText, author);
+    const key = author + '|' + text.slice(0, 80);
+    if (!text || text.length < 2 || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ author, permalink, text: text.slice(0, 1500) });
+  }
+  return { url: location.href, count: out.length, items: out };
+}
+
+async function pageExpandFn(rounds) {
+  function clickMore() {
+    let n = 0;
+    const els = [...document.querySelectorAll('span, div[role="button"]')];
+    for (const e of els) {
+      const t = (e.innerText || '').trim().toLowerCase();
+      if (/^(ver más comentarios|ver \d+ comentario|view more comments|ver más respuestas|ver \d+ respuesta|view \d+ repl|ver respuestas anteriores)/.test(t)) {
+        try { e.click(); n++; } catch {}
+      }
+    }
+    return n;
+  }
+  let total = 0;
+  for (let i = 0; i < rounds; i++) {
+    total += clickMore();
+    window.scrollBy(0, 2200);
+    await new Promise((r) => setTimeout(r, 1600));
+  }
+  return total;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Normaliza una entrada a URL: slug de página -> https://www.facebook.com/<slug>. */
+function fbUrl(input) {
+  if (input.startsWith('http')) return input;
+  if (input.includes('.')) return `https://${input}`;
+  return `https://www.facebook.com/${input.replace(/^\/+/, '')}`;
+}
+
+// ---- comandos ----
+
 export async function comments(args, flags) {
   const { browser } = await connect({ allowLaunch: false });
   const tab = await resolveActivePage(browser, flags);
+  const data = await tab.page.evaluate(pageExtractFn);
+  emit(flags, data, (d) =>
+    `${d.count} comentarios en ${d.url}\n\n` +
+    d.items.map((it, i) => `[${i}] @${it.author || '?'}\n${it.text}\n${it.permalink || '(sin link)'}`).join('\n\n---\n')
+  );
+}
 
-  const data = await tab.page.evaluate(() => {
-    const NOISE = /^(me gusta|responder|compartir|editado|ver traducci[oó]n|top fan|seguir|más relevantes|ver más respuestas|autor|like|reply|share|edited|view translation|\d+\s*(min|h|d|sem|años?|a)|hace .*|\d+[.,]?\d*\s*(mil|mill)?\.?\s*$|·)$/i;
+/** Recolecta permalinks de posts del feed de una página (o de la pestaña activa). */
+export async function posts(args, flags) {
+  const url = args[0];
+  const { browser } = await connect();
+  const tab = await resolveActivePage(browser, flags);
+  if (url) await tab.page.goto(fbUrl(url), { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await sleep(3000);
+  const max = Number(flags.max || 30);
+  const links = await tab.page.evaluate(async (max) => {
+    const found = new Set();
+    for (let i = 0; i < 18 && found.size < max; i++) {
+      document.querySelectorAll('a[href*="/posts/"], a[href*="/permalink/"], a[href*="story_fbid"]').forEach((a) => {
+        try {
+          const u = new URL(a.href);
+          if (/\/posts\/|\/permalink\//.test(u.pathname) || u.searchParams.get('story_fbid')) {
+            let key = u.origin + u.pathname;
+            const sf = u.searchParams.get('story_fbid');
+            const id = u.searchParams.get('id');
+            if (sf) key += `?story_fbid=${sf}${id ? '&id=' + id : ''}`;
+            found.add(key);
+          }
+        } catch {}
+      });
+      window.scrollTo(0, document.body.scrollHeight);
+      await new Promise((r) => setTimeout(r, 1600));
+    }
+    return [...found].slice(0, max);
+  }, max);
+  emit(flags, { count: links.length, posts: links }, (d) => `${d.count} posts\n` + d.posts.join('\n'));
+}
 
-    function cleanText(raw, author) {
-      const lines = (raw || '')
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean);
-      const body = [];
-      for (const l of lines) {
-        if (author && (l === author || author.startsWith(l) || l.startsWith(author))) continue;
-        if (NOISE.test(l)) continue;
-        body.push(l);
-      }
-      return body.join('\n').trim();
+/** Expande comentarios de la pestaña activa (clic en "ver más" + scroll). */
+export async function expand(args, flags) {
+  const { browser } = await connect({ allowLaunch: false });
+  const tab = await resolveActivePage(browser, flags);
+  const rounds = Number(flags.rounds || 6);
+  const clicks = await tab.page.evaluate(pageExpandFn, rounds);
+  const after = await tab.page.evaluate(() => document.querySelectorAll('div[role="article"]').length);
+  emit(flags, { clicks, articles: after }, (d) => `expand: ${d.clicks} clics, ${d.articles} bloques`);
+}
+
+/**
+ * Cosecha masiva: navega una página, recolecta posts, y por cada post expande y
+ * extrae comentarios -> los agrega (JSONL) a workspace/harvest.jsonl con dedup global.
+ */
+export async function harvest(args, flags) {
+  const pages = (flags.pages || args[0] || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!pages.length) return fail(flags, 'uso: bh fb harvest --pages "url1,url2" [--max-posts 15] [--rounds 6]');
+  const maxPosts = Number(flags['max-posts'] || 12);
+  const rounds = Number(flags.rounds || 5);
+
+  const { browser } = await connect();
+  const tab = await resolveActivePage(browser, flags);
+
+  // dedup global contra lo ya cosechado
+  const seen = new Set();
+  if (existsSync(HARVEST)) {
+    for (const line of readFileSync(HARVEST, 'utf8').split('\n').filter(Boolean)) {
+      try { const o = JSON.parse(line); seen.add((o.author || '') + '|' + (o.text || '').slice(0, 80)); } catch {}
+    }
+  }
+
+  const summary = [];
+  for (const pageUrl of pages) {
+    let postLinks = [];
+    try {
+      await tab.page.goto(fbUrl(pageUrl), { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await sleep(3000);
+      postLinks = await tab.page.evaluate(async (max) => {
+        const found = new Set();
+        for (let i = 0; i < 18 && found.size < max; i++) {
+          document.querySelectorAll('a[href*="/posts/"], a[href*="/permalink/"], a[href*="story_fbid"]').forEach((a) => {
+            try {
+              const u = new URL(a.href);
+              if (/\/posts\/|\/permalink\//.test(u.pathname) || u.searchParams.get('story_fbid')) {
+                let key = u.origin + u.pathname;
+                const sf = u.searchParams.get('story_fbid');
+                const id = u.searchParams.get('id');
+                if (sf) key += `?story_fbid=${sf}${id ? '&id=' + id : ''}`;
+                found.add(key);
+              }
+            } catch {}
+          });
+          window.scrollTo(0, document.body.scrollHeight);
+          await new Promise((r) => setTimeout(r, 1600));
+        }
+        return [...found].slice(0, max);
+      }, maxPosts);
+    } catch (e) {
+      summary.push({ page: pageUrl, error: e.message });
+      continue;
     }
 
-    function cleanLink(href) {
+    let added = 0;
+    for (const postUrl of postLinks) {
       try {
-        const u = new URL(href);
-        // conserva solo comment_id / reply_comment_id si existen
-        const cid = u.searchParams.get('comment_id');
-        const rid = u.searchParams.get('reply_comment_id');
-        let base = u.origin + u.pathname;
-        const qs = [];
-        if (cid) qs.push('comment_id=' + cid);
-        if (rid) qs.push('reply_comment_id=' + rid);
-        return base + (qs.length ? '?' + qs.join('&') : '');
-      } catch {
-        return href.split('&__cft__')[0];
+        await tab.page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await sleep(2500);
+        await tab.page.evaluate(pageExpandFn, rounds);
+        const data = await tab.page.evaluate(pageExtractFn);
+        for (const it of data.items) {
+          const key = (it.author || '') + '|' + (it.text || '').slice(0, 80);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          appendFileSync(HARVEST, JSON.stringify({ postUrl, ...it }) + '\n');
+          added++;
+        }
+      } catch (e) {
+        // post falló, seguir
       }
+      await sleep(800);
     }
+    summary.push({ page: pageUrl, posts: postLinks.length, comments: added });
+  }
 
-    const arts = [...document.querySelectorAll('div[role="article"]')];
-    const seen = new Set();
-    const out = [];
-    for (const a of arts) {
-      const label = a.getAttribute('aria-label') || '';
-      const author = label
-        .replace(/^Comentario de\s*/i, '')
-        .replace(/^Comment by\s*/i, '')
-        .replace(/\s*·.*$/, '')
-        .replace(/\s+hace\s+.*$/i, '')
-        .replace(/\s+\d+\s*(min|h|d|sem|años?).*$/i, '')
-        .trim();
-      let permalink = '';
-      const anchors = [...a.querySelectorAll('a[href]')];
-      const c = anchors.find((x) =>
-        /comment_id=|reply_comment_id=|\/posts\/|story_fbid=|\/permalink\//.test(x.href)
-      );
-      if (c) permalink = cleanLink(c.href);
-      const text = cleanText(a.innerText, author);
-      const key = author + '|' + text.slice(0, 80);
-      if (!text || seen.has(key)) continue;
-      seen.add(key);
-      out.push({ author, permalink, text: text.slice(0, 1200) });
-    }
-    return { url: location.href, count: out.length, items: out };
-  });
-
-  emit(
-    flags,
-    data,
-    (d) =>
-      `${d.count} bloques en ${d.url}\n\n` +
-      d.items
-        .map((it, i) => `[${i}] @${it.author || '?'}\n${it.text}\n${it.permalink || '(sin link)'}`)
-        .join('\n\n---\n')
+  const totalLines = existsSync(HARVEST) ? readFileSync(HARVEST, 'utf8').split('\n').filter(Boolean).length : 0;
+  emit(flags, { summary, harvestTotal: totalLines, file: HARVEST }, (d) =>
+    d.summary.map((s) => s.error ? `${s.page}: ERROR ${s.error}` : `${s.page}: ${s.posts} posts, +${s.comments} comentarios`).join('\n') + `\n\nharvest total: ${d.harvestTotal}`
   );
 }

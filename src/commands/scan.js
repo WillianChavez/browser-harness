@@ -29,6 +29,12 @@ const VIOLENCE = [
   'que lo linchen', 'que los linchen', 'horca para', 'pena capital',
   'reventar', 'reventarle', 'destazar', 'apuñalar', 'apuñalen',
   'que no quede ninguno', 'sin piedad', 'sáquenles', 'tírenlos',
+  // violencia celebratoria / incitación contra delincuentes (subclase válida)
+  'bien muerto', 'qué bueno que lo mataron', 'que bueno que lo mataron', 'ojalá lo maten',
+  'ojalá se pudra', 'que se lo lleve', 'se lo merecía la muerte', 'así quedaste', 'asi quedaste',
+  'denle mona', 'denles mona', 'que les den', 'denles plomo', 'denle plomo', 'denles paja',
+  'que se mueran de hambre', 'pena de muerte para', 'que los cuelguen', 'limpieza social',
+  'mátenlos a todos', 'fuego a', 'quémenlos', 'a la hoguera', 'que ardan en',
 ];
 
 const norm = (s) => (s || '').toLowerCase();

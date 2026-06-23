@@ -141,6 +141,48 @@ export async function expand(args, flags) {
 }
 
 /**
+ * Cosecha comentarios de una lista de URLs de POSTS directos (los que me pase el usuario).
+ * uso: bh fb grab --posts "url1,url2" [--rounds 6]
+ */
+export async function grab(args, flags) {
+  const urls = (flags.posts || args.join(',') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!urls.length) return fail(flags, 'uso: bh fb grab --posts "url1,url2,..."');
+  const rounds = Number(flags.rounds || 6);
+  const { browser } = await connect();
+  const ctx = browser.contexts()[0] || (await browser.newContext());
+  let page = await ctx.newPage();
+
+  const seen = new Set();
+  if (existsSync(HARVEST)) {
+    for (const line of readFileSync(HARVEST, 'utf8').split('\n').filter(Boolean)) {
+      try { const o = JSON.parse(line); seen.add((o.author || '') + '|' + (o.text || '').slice(0, 80)); } catch {}
+    }
+  }
+
+  let added = 0;
+  for (const postUrl of urls) {
+    try {
+      if (page.isClosed()) page = await ctx.newPage();
+      await page.goto(postUrl.startsWith('http') ? postUrl : `https://${postUrl}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await sleep(2500);
+      await page.evaluate(pageExpandFn, rounds);
+      const data = await page.evaluate(pageExtractFn);
+      for (const it of data.items) {
+        const key = (it.author || '') + '|' + (it.text || '').slice(0, 80);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        appendFileSync(HARVEST, JSON.stringify({ postUrl, ...it }) + '\n');
+        added++;
+      }
+    } catch {}
+    await sleep(800);
+  }
+  await page.close().catch(() => {});
+  const totalLines = existsSync(HARVEST) ? readFileSync(HARVEST, 'utf8').split('\n').filter(Boolean).length : 0;
+  emit(flags, { posts: urls.length, comments: added, harvestTotal: totalLines }, (d) => `+${d.comments} comentarios de ${d.posts} posts. harvest total: ${d.harvestTotal}`);
+}
+
+/**
  * Cosecha masiva: navega una página, recolecta posts, y por cada post expande y
  * extrae comentarios -> los agrega (JSONL) a workspace/harvest.jsonl con dedup global.
  */
@@ -184,9 +226,9 @@ export async function harvest(args, flags) {
     try {
       await gotoSafe(fbUrl(pageUrl));
       await sleep(3000);
-      postLinks = await page.evaluate(async (max) => {
-        const found = new Set();
-        for (let i = 0; i < 18 && found.size < max; i++) {
+      const pairs = await page.evaluate(async (max) => {
+        const found = new Map(); // key -> snippet de texto del post
+        for (let i = 0; i < 20 && found.size < max * 3; i++) {
           document.querySelectorAll('a[href*="/posts/"], a[href*="/permalink/"], a[href*="story_fbid"]').forEach((a) => {
             try {
               const u = new URL(a.href);
@@ -195,15 +237,28 @@ export async function harvest(args, flags) {
                 const sf = u.searchParams.get('story_fbid');
                 const id = u.searchParams.get('id');
                 if (sf) key += `?story_fbid=${sf}${id ? '&id=' + id : ''}`;
-                found.add(key);
+                if (!found.has(key)) {
+                  let el = a, best = '';
+                  for (let k = 0; k < 12 && el; k++) {
+                    el = el.parentElement;
+                    if (el && el.innerText && el.innerText.length > best.length) best = el.innerText;
+                    if (best.length > 200) break;
+                  }
+                  found.set(key, best.slice(0, 500));
+                }
               }
             } catch {}
           });
           window.scrollTo(0, document.body.scrollHeight);
           await new Promise((r) => setTimeout(r, 1600));
         }
-        return [...found].slice(0, max);
+        return [...found.entries()].map(([key, text]) => ({ key, text }));
       }, maxPosts);
+
+      // Filtro de tema: solo posts de crimen/violencia/política conflictiva (salvo --all)
+      const CRIME = /pandill|marero|ms-?13|barrio ?18|homicid|asesin|matan|mat[oó]|capturad|crimen|delincuent|violaci[oó]n|viol[oó]|feminicid|narco|droga|extorsi|pen[ai]\b|c[aá]rcel|cecot|cad[aá]ver|balac|tiroteo|muert|terror|secuestr|r[eé]gimen|dictadura|corrupt/i;
+      const useAll = flags.all;
+      postLinks = pairs.filter((p) => useAll || CRIME.test(p.text)).map((p) => p.key).slice(0, maxPosts);
     } catch (e) {
       summary.push({ page: pageUrl, error: e.message });
       continue;

@@ -34,13 +34,14 @@ const REGISTRY = {
   'fb posts': facebook.posts,
   'fb expand': facebook.expand,
   'fb harvest': facebook.harvest,
+  'fb grab': facebook.grab,
   'row add': dataset.add,
   'row count': dataset.count,
   'fb scan': scanmod.scan,
 };
 
-const BOOL_FLAGS = new Set(['json', 'full']);
-const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data', 'pages', 'max', 'max-posts', 'rounds']);
+const BOOL_FLAGS = new Set(['json', 'full', 'all']);
+const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data', 'pages', 'posts', 'max', 'max-posts', 'rounds']);
 
 function parse(argv) {
   const positional = [];

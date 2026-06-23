@@ -1,0 +1,10 @@
+{
+  "cdpUrl": "http://172.24.240.1:9223",
+  "chromePath": "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+  "userDataDir": "C:\\Users\\willi\\AppData\\Local\\Google\\Chrome\\User Data",
+  "remoteDebuggingAddress": "0.0.0.0",
+  "defaults": {
+    "timeout": 30000,
+    "handshakeTimeout": 5000
+  }
+}

@@ -21,7 +21,14 @@ const VIOLENCE = [
   'quemar', 'quemen', 'que ardan', 'que arda',
   'colgar', 'cuelguen', 'horca', 'ahorcar',
   'sacar a golpes', 'a verga', 'verguiar', 'verguear', 'cortarle', 'degollar',
-  'eliminar', 'exterminar', 'acribillar', 'acribillen',
+  'eliminar', 'exterminar', 'exterminarlos', 'acribillar', 'acribillen',
+  'denle paja', 'denles paja', 'dale paja', 'darle leña', 'denle leña',
+  'plomear', 'plomearlo', 'aplomar', 'que se pudra', 'que se pudran', 'pudranse',
+  'mátenlos a todos', 'matenlos a todos', 'que mueran todos', 'que mueran',
+  'al paredón', 'fusilamiento', 'fusílenlos', 'exterminio',
+  'que lo linchen', 'que los linchen', 'horca para', 'pena capital',
+  'reventar', 'reventarle', 'destazar', 'apuñalar', 'apuñalen',
+  'que no quede ninguno', 'sin piedad', 'sáquenles', 'tírenlos',
 ];
 
 const norm = (s) => (s || '').toLowerCase();

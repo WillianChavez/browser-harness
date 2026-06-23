@@ -5,6 +5,8 @@ import * as tabs from './commands/tabs.js';
 import * as view from './commands/view.js';
 import * as interact from './commands/interact.js';
 import * as advanced from './commands/advanced.js';
+import * as facebook from './commands/facebook.js';
+import * as dataset from './commands/dataset.js';
 
 const REGISTRY = {
   'session start': session.start,
@@ -27,10 +29,13 @@ const REGISTRY = {
   eval: advanced.evaluate,
   cookies: advanced.cookies,
   storage: advanced.storage,
+  'fb comments': facebook.comments,
+  'row add': dataset.add,
+  'row count': dataset.count,
 };
 
 const BOOL_FLAGS = new Set(['json', 'full']);
-const VALUE_FLAGS = new Set(['out', 'timeout', 'tab']);
+const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data']);
 
 function parse(argv) {
   const positional = [];

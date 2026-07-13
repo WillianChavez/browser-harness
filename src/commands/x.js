@@ -105,7 +105,12 @@ export async function pool(args, flags) {
         await tab.page.evaluate(() => window.scrollBy(0, 2000));
         await tab.page.waitForTimeout(1300);
       }
-      const items = await tab.page.evaluate(extractFn);
+      let items = await tab.page.evaluate(extractFn).catch(() => []);
+      if (items.length === 0) {
+        // reintento: la SPA a veces no ha pintado aún al momento del evaluate
+        await tab.page.waitForTimeout(2000);
+        items = await tab.page.evaluate(extractFn).catch(() => []);
+      }
       for (const it of items) {
         const key = (it.author || '') + '|' + (it.text || '').slice(0, 80);
         if (seen.has(key)) continue;

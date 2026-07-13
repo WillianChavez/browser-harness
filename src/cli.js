@@ -8,6 +8,7 @@ import * as advanced from './commands/advanced.js';
 import * as facebook from './commands/facebook.js';
 import * as dataset from './commands/dataset.js';
 import * as scanmod from './commands/scan.js';
+import * as xmod from './commands/x.js';
 
 const REGISTRY = {
   'session start': session.start,
@@ -38,10 +39,12 @@ const REGISTRY = {
   'row add': dataset.add,
   'row count': dataset.count,
   'fb scan': scanmod.scan,
+  'x tweets': xmod.tweets,
+  'x search': xmod.search,
 };
 
 const BOOL_FLAGS = new Set(['json', 'full', 'all']);
-const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data', 'pages', 'posts', 'max', 'max-posts', 'rounds']);
+const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data', 'pages', 'posts', 'max', 'max-posts', 'rounds', 'scroll']);
 
 function parse(argv) {
   const positional = [];

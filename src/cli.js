@@ -41,10 +41,11 @@ const REGISTRY = {
   'fb scan': scanmod.scan,
   'x tweets': xmod.tweets,
   'x search': xmod.search,
+  'x pool': xmod.pool,
 };
 
 const BOOL_FLAGS = new Set(['json', 'full', 'all']);
-const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data', 'pages', 'posts', 'max', 'max-posts', 'rounds', 'scroll']);
+const VALUE_FLAGS = new Set(['out', 'timeout', 'tab', 'data', 'pages', 'posts', 'max', 'max-posts', 'rounds', 'scroll', 'queries']);
 
 function parse(argv) {
   const positional = [];

@@ -35,7 +35,29 @@ export async function cookies(args, flags) {
     return emit(flags, { set: true }, () => 'cookies guardadas');
   }
   const list = await ctx.cookies(tab.page.url());
-  emit(flags, { cookies: list }, (d) => d.cookies.map((c) => `${c.name}=${c.value}`).join('\n'));
+  // Por defecto REDACTA los valores: exponer cookies de sesión completas del perfil
+  // real permite secuestro de sesión si la salida se filtra/almacena. --reveal para
+  // ver el valor real (acción sensible; el modelo debe pedirlo explícitamente).
+  const reveal = !!flags.reveal;
+  const mask = (v) => {
+    const s = String(v ?? '');
+    if (s.length <= 6) return '•'.repeat(s.length);
+    return s.slice(0, 3) + '…' + s.slice(-2) + `(${s.length})`;
+  };
+  const out = list.map((c) => ({
+    name: c.name,
+    domain: c.domain,
+    path: c.path,
+    httpOnly: c.httpOnly,
+    secure: c.secure,
+    value: reveal ? c.value : mask(c.value),
+  }));
+  emit(
+    flags,
+    { cookies: out, redacted: !reveal, count: out.length },
+    (d) => (d.redacted ? '[valores redactados — usa --reveal para verlos]\n' : '') +
+      d.cookies.map((c) => `${c.name}=${c.value}  (${c.domain})`).join('\n')
+  );
 }
 
 export async function storage(args, flags) {

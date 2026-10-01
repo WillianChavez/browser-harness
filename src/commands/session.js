@@ -19,7 +19,7 @@ export async function status(args, flags) {
     return;
   }
   const { browser } = await connect({ allowLaunch: false });
-  const tabs = await listTabs(browser);
+  const tabs = await listTabs(browser, { titles: false });
   emit(
     flags,
     {

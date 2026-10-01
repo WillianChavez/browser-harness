@@ -30,20 +30,39 @@ function extractFn() {
 }
 
 /**
- * Extrae los tuits visibles de la pestaña activa (timeline o resultados de búsqueda).
- * Autor (@handle), texto exacto y permalink real del tuit.
+ * Recolecta tuits extrayendo DESPUÉS DE CADA scroll y acumulando, no una sola vez
+ * al final. X virtualiza el timeline: los tuits que salen del viewport se eliminan
+ * del DOM, así que "scroll-todo-luego-extraer" pierde los intermedios. Dedup por
+ * author|texto. Devuelve el arreglo acumulado en orden de aparición.
+ */
+async function collectWhileScrolling(page, scrolls) {
+  const acc = new Map();
+  const absorb = async () => {
+    const items = await page.evaluate(extractFn).catch(() => []);
+    for (const it of items) {
+      const key = (it.author || '') + '|' + (it.text || '').slice(0, 80);
+      if (!acc.has(key)) acc.set(key, it);
+    }
+  };
+  await absorb(); // lo visible antes de scrollear
+  for (let i = 0; i < scrolls; i++) {
+    await page.evaluate(() => window.scrollBy(0, 2000));
+    await page.waitForTimeout(1200);
+    await absorb();
+  }
+  return [...acc.values()];
+}
+
+/**
+ * Extrae los tuits de la pestaña activa (timeline o resultados de búsqueda),
+ * acumulando a lo largo del scroll. Autor (@handle), texto exacto y permalink real.
  */
 export async function tweets(args, flags) {
   const { browser } = await connect({ allowLaunch: false });
   const tab = await resolveActivePage(browser, flags);
 
   const scrolls = Number(flags.scroll || 0);
-  for (let i = 0; i < scrolls; i++) {
-    await tab.page.evaluate(() => window.scrollBy(0, 2000));
-    await tab.page.waitForTimeout(1200);
-  }
-
-  const items = await tab.page.evaluate(extractFn);
+  const items = await collectWhileScrolling(tab.page, scrolls);
   const data = { url: tab.page.url(), count: items.length, items };
 
   emit(
@@ -101,15 +120,12 @@ export async function pool(args, flags) {
       await tab.page
         .waitForSelector('article[data-testid="tweet"], [data-testid="emptyState"]', { timeout: 15000 })
         .catch(() => {});
-      for (let i = 0; i < scrolls; i++) {
-        await tab.page.evaluate(() => window.scrollBy(0, 2000));
-        await tab.page.waitForTimeout(1300);
-      }
-      let items = await tab.page.evaluate(extractFn).catch(() => []);
+      // Extrae acumulando por scroll (X virtualiza: no perder tuits intermedios).
+      let items = await collectWhileScrolling(tab.page, scrolls);
       if (items.length === 0) {
         // reintento: la SPA a veces no ha pintado aún al momento del evaluate
         await tab.page.waitForTimeout(2000);
-        items = await tab.page.evaluate(extractFn).catch(() => []);
+        items = await collectWhileScrolling(tab.page, 1);
       }
       for (const it of items) {
         const key = (it.author || '') + '|' + (it.text || '').slice(0, 80);

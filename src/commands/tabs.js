@@ -58,5 +58,6 @@ export async function close(args, flags) {
 }
 
 function normalize(url) {
-  return /^[a-zA-Z]+:\/\//.test(url) ? url : `https://${url}`;
+  // esquemas con // (https://), y sin // (data:, about:, mailto:, javascript:); no confundir host:puerto
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) || /^(data|about|mailto|javascript|blob|chrome):/i.test(url) ? url : `https://${url}`;
 }

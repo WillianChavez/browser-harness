@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { loadConfig, cdpPort, WORKSPACE, STATE_FILE } from './config.js';
+import { store } from './context.js';
 
 /** Comprueba si el endpoint CDP responde. */
 export async function cdpReachable(cfg = loadConfig()) {
@@ -24,7 +25,6 @@ export function launchChrome(cfg = loadConfig()) {
   const port = cdpPort(cfg);
   const args = [
     `--remote-debugging-port=${port}`,
-    `--remote-debugging-address=${cfg.remoteDebuggingAddress}`,
     `--user-data-dir=${cfg.userDataDir}`,
   ];
   const child = spawn(cfg.chromePath, args, { detached: true, stdio: 'ignore' });
@@ -32,11 +32,24 @@ export function launchChrome(cfg = loadConfig()) {
   return { pid: child.pid, command: cfg.chromePath, args };
 }
 
+// Conexión reutilizable: en el daemon vive entre llamadas (evita ~1s de connectOverCDP
+// por comando); en modo directo el proceso muere tras cada comando, así que no cambia nada.
+let cached = null; // { browser, version }
+
 /**
  * Conecta al navegador: attach si el CDP responde; si no, lanza y reintenta.
  * Devuelve { browser, launched }.
  */
 export async function connect({ allowLaunch = true } = {}) {
+  const t0 = Date.now();
+  const done = (r) => {
+    const s = store();
+    if (s && s.connectMs === undefined) s.connectMs = Date.now() - t0;
+    return r;
+  };
+  if (cached && cached.browser.isConnected()) return done({ browser: cached.browser, launched: false, version: cached.version });
+  cached = null;
+
   const cfg = loadConfig();
   let launched = false;
   let info = await cdpReachable(cfg);
@@ -57,7 +70,11 @@ export async function connect({ allowLaunch = true } = {}) {
   const browser = await chromium.connectOverCDP(cfg.cdpUrl, {
     timeout: cfg.defaults.handshakeTimeout,
   });
-  return { browser, launched, version: info };
+  cached = { browser, version: info };
+  browser.on('disconnected', () => {
+    if (cached && cached.browser === browser) cached = null;
+  });
+  return done({ browser, launched, version: info });
 }
 
 /** Todas las páginas (tabs tipo 'page') de todos los contextos. */
@@ -65,32 +82,46 @@ export function allPages(browser) {
   return browser.contexts().flatMap((c) => c.pages());
 }
 
+const targetIds = new WeakMap(); // Page -> targetId (cada newCDPSession cuesta ~100ms)
+const cdpSessions = new WeakMap(); // Page -> CDPSession reutilizable
+
+/** Sesión CDP cacheada de una página (screenshot, etc.). */
+export async function cdpSessionOf(page) {
+  let s = cdpSessions.get(page);
+  if (!s) {
+    s = await page.context().newCDPSession(page);
+    cdpSessions.set(page, s);
+    page.once('close', () => cdpSessions.delete(page));
+  }
+  return s;
+}
+
 /** targetId real (vía CDP) de una página de Playwright. */
 export async function targetIdOf(page) {
+  const hit = targetIds.get(page);
+  if (hit) return hit;
   const s = await page.context().newCDPSession(page);
   try {
     const { targetInfo } = await s.send('Target.getTargetInfo');
+    targetIds.set(page, targetInfo.targetId);
     return targetInfo.targetId;
   } finally {
     await s.detach().catch(() => {});
   }
 }
 
-/** Lista de tabs con metadatos. */
-export async function listTabs(browser) {
+/** Lista de tabs. Los targetIds se resuelven en paralelo; los títulos sólo si se piden. */
+export async function listTabs(browser, { titles = true } = {}) {
   const pages = allPages(browser);
-  const tabs = [];
-  for (let i = 0; i < pages.length; i++) {
-    const page = pages[i];
-    let targetId = null;
-    try {
-      targetId = await targetIdOf(page);
-    } catch {
-      // ignore
-    }
-    tabs.push({ index: i, targetId, title: await page.title().catch(() => ''), url: page.url(), page });
-  }
-  return tabs;
+  return Promise.all(
+    pages.map(async (page, index) => ({
+      index,
+      targetId: await targetIdOf(page).catch(() => null),
+      title: titles ? await page.title().catch(() => '') : '',
+      url: page.url(),
+      page,
+    }))
+  );
 }
 
 // ---- estado (pestaña activa) ----
@@ -129,7 +160,7 @@ export function clearActiveTarget(targetId) {
  * Prioridad: flag --tab (índice o targetId) > estado guardado > última página.
  */
 export async function resolveActivePage(browser, flags = {}) {
-  const tabs = await listTabs(browser);
+  const tabs = await listTabs(browser, { titles: false });
   if (tabs.length === 0) throw new Error('No hay tabs abiertas.');
 
   if (flags.tab != null) {

@@ -50,12 +50,22 @@ directorio (ver `.claude/skills/browser-harness/SKILL.md` para el cuándo/cómo)
 ## Comandos (ver README.md para el detalle completo)
 
 Sesión: `session start|status|stop` · Tabs: `tabs|open|navigate|focus|close`
-Ver: `snapshot|screenshot|pdf` · Interactuar: `click|fill|type|press|hover|select`
+Ver: `text|els|snapshot|screenshot|pdf` · Interactuar: `click|fill|type|press|hover|select` (acepta refs `@eN` de `els`) ·
+Esperar/encadenar: `wait|batch` · Daemon: `daemon status|stop|restart`
 Avanzado: `eval|cookies|storage` · Facebook: `fb comments|fb posts|fb expand|
 fb harvest|fb grab|fb scan` · Dataset: `row add|row count`
+
+## Rendimiento y BrowserOS
+
+`bh` usa un daemon local (conexión CDP persistente, ~50 ms/comando); no hace falta gestionarlo, se reinicia solo
+si cambia `src/`. Preferir `bh els` + `@eN` + `bh batch` a ráfagas de `eval` (menos turnos). Detalle en el skill
+`browser-harness`. BrowserOS neo está registrado como MCP `browseros` (puente `scripts/browseros-bridge.mjs`, sesión
+nueva para cargarlo); **las reglas de arriba valen igual para sus herramientas** (en especial 2, 3, 5 y 7), y no tiene
+las sesiones del usuario hasta que éste inicie sesión allí.
 
 ## Config
 
 `config.json`: `cdpUrl` (default `http://172.24.240.1:9223`, Chrome de Windows
-desde WSL), `chromePath`, `userDataDir` (perfil real). Editable si el entorno
-cambia (otra IP de host, otro usuario de Windows, etc.).
+desde WSL), `chromePath`, `userDataDir` (perfil real), `defaults.actionTimeout`
+(6000), `daemonPort` (19333). Editable si el entorno cambia (otra IP de host,
+otro usuario de Windows, etc.).
